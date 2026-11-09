@@ -32,6 +32,24 @@ const PANEL_CLOSE_DELAY = 300;      // ms, lets the pointer cross from the bar t
 const now = () => Math.floor(Date.now() / 1000);
 const states = () => shared(KEY_STATE) ?? {};
 
+// Windows: Git's installer puts git on PATH but usually not its sh. When "sh" can't
+// start, git says where it lives (…/Git/mingw64/libexec/git-core → …/Git/bin/sh.exe).
+let SH = "sh";
+async function runSh(args) {
+  try {
+    return await exec(SH, args);
+  } catch (e) {
+    if (SH !== "sh" || !String(e?.message ?? e).includes("cannot run")) throw e; // not a timeout
+    const core = (await exec("git", ["--exec-path"]).catch(() => null))?.stdout.trim() ?? "";
+    const root = core.replace(/\/[^/]+\/libexec\/git-core$/, "");
+    if (!root || root === core) throw e;
+    const r = await exec(`${root}/bin/sh.exe`, args).catch(() => null);
+    if (!r) throw e;
+    SH = `${root}/bin/sh.exe`;
+    return r;
+  }
+}
+
 function levelColor(level, t) {
   if (level === "hot") return t.ansi1 ?? t.blocked;
   if (level === "warn") return t.ansi3 ?? t.done;
@@ -84,7 +102,7 @@ export default class UsageLimits extends View {
       let next;
       const prev = states()[p.id] ?? { report: null, lastGood: null, installed: null };
       try {
-        const r = await exec("sh", [`${appHome()}/mods/${MOD}/${p.helper}`]);
+        const r = await runSh([`${appHome()}/mods/${MOD}/${p.helper}`]);
         next = r.code === 127 ? nextState(prev, null, false) : nextState(prev, p.parse(r.stdout, now()), true);
       } catch (e) {
         next = { ...prev, report: { status: "error", message: String(e?.message ?? e), plan: null, observedAt: now(), source: p.helper, windows: [] } };
@@ -113,7 +131,7 @@ export default class UsageLimits extends View {
         const app = AGENTS[info.status?.app];
         const pid = info.foreground?.pid;
         if (app && pid) {
-          const r = await exec("sh", [`${appHome()}/mods/${MOD}/helpers/session.sh`, app, String(pid)]);
+          const r = await runSh([`${appHome()}/mods/${MOD}/helpers/session.sh`, app, String(pid)]);
           const data = r.code === 0 ? parseSession(r.stdout, app) : null;
           if (data) next = { data, title: (info.cwd ?? "").split("/").pop() };
         }

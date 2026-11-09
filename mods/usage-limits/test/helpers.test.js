@@ -15,9 +15,17 @@ function run(helper, env) {
   return { ...r, ms: Date.now() - t0 };
 }
 
+// Git Bash on Windows has no pgrep, but its /proc has every shell process's command line.
 function alive(pattern) {
-  return spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" }).stdout.trim() !== "";
+  const r = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
+  if (!r.error) return r.stdout.trim() !== "";
+  const ps = spawnSync("sh", ["-c", 'for f in /proc/[0-9]*/cmdline; do tr "\\0" " " <"$f" 2>/dev/null; echo; done'], { encoding: "utf8" });
+  return ps.stdout.replace(/\\/g, "/").split("\n").some((line) => line.includes(pattern));
 }
+
+// Codex's session is found with pgrep and lsof, which Windows doesn't have: there the
+// helper always exits 1 (no block), as the "no open session file" test checks.
+const NO_LSOF = process.platform === "win32" && "needs pgrep and lsof";
 
 test("claude helper: bogus bin → exit 127", () => {
   const r = run("claude-usage.sh", { HERDR_USAGE_CLAUDE_BIN: "/nonexistent/claude" });
@@ -116,7 +124,7 @@ function fakeTools(rollout) {
   return dir;
 }
 
-test("session helper, codex: the file its app-server holds open, last usage and window", () => {
+test("session helper, codex: the file its app-server holds open, last usage and window", { skip: NO_LSOF }, () => {
   const home = mkdtempSync(join(tmpdir(), "ul-codex-"));
   const day = join(home, "sessions", "2026", "11", "04");
   mkdirSync(day, { recursive: true });
@@ -132,7 +140,7 @@ test("session helper, codex: no open session file → exit 1, never a guess", ()
   assert.deepEqual([r.status, r.stdout], [1, ""]);
 });
 
-test("session helper, codex: with two files open, the one being written", () => {
+test("session helper, codex: with two files open, the one being written", { skip: NO_LSOF }, () => {
   const day = join(mkdtempSync(join(tmpdir(), "ul-codex-")), "sessions", "2026", "11", "04");
   mkdirSync(day, { recursive: true });
   const old = join(day, "rollout-a.jsonl");
